@@ -1,0 +1,15 @@
+[package]
+name = "launcher"
+version = "0.1.0"
+authors = ["Jakob Schwab <j.schwab@mail.de>"]
+edition = "2018"
+default-run = "launcher"
+
+[[bin]]
+path = "src/main_launcher.rs"
+name = "launcher"
+
+[dependencies]
+cottontail = { path = "../cottontail"}
+
+fontdue = "0.4.0"
