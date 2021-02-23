@@ -19,7 +19,7 @@ use cottontail::{
     image::Bitmap,
     math::{Random, Shufflebag, Vec2i},
 };
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct InputParams {
@@ -38,7 +38,6 @@ struct Input {
 
 impl Input {
     fn new() -> Input {
-        let params = deserialize_from_json_file("input_params.txt");
         let mut background_bitmap = Bitmap::new_empty();
         let mut text_font_data = Vec::new();
         for filepath in collect_files(".") {
@@ -70,6 +69,7 @@ impl Input {
             serialize_to_json_file(&params, "input_params.txt");
             panic!("Please first fill out the 'input_params.txt' in the directory where `chotto.exe` is located");
         }
+        let params = deserialize_from_json_file("input_params.txt");
 
         Input {
             background_bitmap,
@@ -164,6 +164,7 @@ fn main() {
             // println!("{:#?}", &digit_metrics);
         }
 
+        number_bitmap_premultiplied.trim_by_value(true, true, true, true, PixelRGBA::transparent());
         // number_bitmap_premultiplied
         //     .to_unpremultiplied_alpha()
         //     .write_to_png_file(&format!("target/test_numbers/{}.png", number));
@@ -174,51 +175,55 @@ fn main() {
     let cell_width = (bottom_right.x - top_left.x) / 5;
     let cell_height = (bottom_right.y - top_left.y) / 5;
 
-    (1..=sheet_count).into_par_iter().for_each(|sheet_index| {
-        let start = SystemTime::now();
-        let since_the_epoch = start.duration_since(UNIX_EPOCH).unwrap();
-        let seed = (since_the_epoch.as_nanos() & (std::u64::MAX as u128)) as u64;
-        let mut random = Random::new_from_seed(seed.wrapping_add(sheet_index as u64));
+    let start = SystemTime::now();
+    let since_the_epoch = start.duration_since(UNIX_EPOCH).unwrap();
+    let seed = (since_the_epoch.as_nanos() & (std::u64::MAX as u128)) as u64;
+    let randoms = Random::new_from_seed_multiple(seed, sheet_count);
+    randoms
+        .into_par_iter()
+        .enumerate()
+        .for_each(|(sheet_index, mut random)| {
+            let sheet_index = sheet_index + 1;
 
-        let mut background = background.clone();
-        let mut col_1 = Shufflebag::new((1..=15).collect());
-        let mut col_2 = Shufflebag::new((16..=30).collect());
-        let mut col_3 = Shufflebag::new((31..=45).collect());
-        let mut col_4 = Shufflebag::new((46..=60).collect());
-        let mut col_5 = Shufflebag::new((61..=75).collect());
-        for y in 0..5 {
-            for x in 0..5 {
-                if x == 2 && y == 2 {
-                    continue;
-                }
-                let center = top_left
-                    + Vec2i::new(
-                        x * cell_width + cell_width / 2,
-                        y * cell_height + cell_height / 2,
+            let mut background = background.clone();
+            let mut col_1 = Shufflebag::new((1..=15).collect());
+            let mut col_2 = Shufflebag::new((16..=30).collect());
+            let mut col_3 = Shufflebag::new((31..=45).collect());
+            let mut col_4 = Shufflebag::new((46..=60).collect());
+            let mut col_5 = Shufflebag::new((61..=75).collect());
+            for y in 0..5 {
+                for x in 0..5 {
+                    if x == 2 && y == 2 {
+                        continue;
+                    }
+                    let center = top_left
+                        + Vec2i::new(
+                            x * cell_width + cell_width / 2,
+                            y * cell_height + cell_height / 2,
+                        );
+
+                    let number = match x {
+                        0 => col_1.get_next(&mut random),
+                        1 => col_2.get_next(&mut random),
+                        2 => col_3.get_next(&mut random),
+                        3 => col_4.get_next(&mut random),
+                        4 => col_5.get_next(&mut random),
+                        _ => unreachable!(),
+                    };
+                    let number_bitmap = number_bitmaps.get(&number).unwrap();
+                    number_bitmap.blit_to_alpha_blended_premultiplied(
+                        &mut background,
+                        center - number_bitmap.rect().dim / 2,
+                        true,
+                        cottontail::image::ColorBlendMode::Normal,
                     );
-
-                let number = match x {
-                    0 => col_1.get_next(&mut random),
-                    1 => col_2.get_next(&mut random),
-                    2 => col_3.get_next(&mut random),
-                    3 => col_4.get_next(&mut random),
-                    4 => col_5.get_next(&mut random),
-                    _ => unreachable!(),
-                };
-                let number_bitmap = number_bitmaps.get(&number).unwrap();
-                number_bitmap.blit_to_alpha_blended_premultiplied(
-                    &mut background,
-                    center - number_bitmap.rect().dim / 2,
-                    true,
-                    cottontail::image::ColorBlendMode::Multiply,
-                );
+                }
             }
-        }
 
-        background
-            .to_unpremultiplied_alpha()
-            .write_to_png_file(&format!("output_sheets/sheet_{}.png", sheet_index));
-    });
+            background
+                .to_unpremultiplied_alpha()
+                .write_to_png_file(&format!("output_sheets/sheet_{}.png", sheet_index));
+        });
 
     #[cfg(not(debug_assertions))]
     show_messagebox("Chotto", "Finished creating sheets. Enjoy!", false);
