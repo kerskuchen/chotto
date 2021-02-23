@@ -38,18 +38,6 @@ struct Input {
 
 impl Input {
     fn new() -> Input {
-        if !path_exists("input_params.txt") {
-            let params = InputParams {
-                text_font_size: 100.0,
-                text_color: PixelRGBA::new(255, 128, 64, 255),
-                grid_top_left: Vec2i::new(15, 32),
-                grid_bottom_right: Vec2i::new(234, 433),
-                number_sheets_to_generate: 100,
-            };
-            serialize_to_json_file(&params, "input_params.txt");
-            panic!("Please first fill out the 'input_params.txt' in the directory where `chotto.exe` is located");
-        }
-
         let params = deserialize_from_json_file("input_params.txt");
         let mut background_bitmap = Bitmap::new_empty();
         let mut text_font_data = Vec::new();
@@ -62,12 +50,26 @@ impl Input {
                     read_file_whole(&filepath).expect(&format!("Cannot read file '{}'", filepath));
             }
         }
-        assert!(background_bitmap.width != 0 && background_bitmap.height!= 0,
-            "Please place a template PNG image file into the directory where `chotto.exe` is located");
+        assert!(
+            background_bitmap.width != 0 && background_bitmap.height != 0,
+            "Please place a PNG image file into the directory where `chotto.exe` is located"
+        );
         assert!(
             !text_font_data.is_empty(),
             "Please place a TTF font file into the directory where `chotto.exe` is located"
         );
+
+        if !path_exists("input_params.txt") {
+            let params = InputParams {
+                text_font_size: 100.0,
+                text_color: PixelRGBA::new(255, 128, 64, 255),
+                grid_top_left: Vec2i::new(15, 32),
+                grid_bottom_right: Vec2i::new(234, 433),
+                number_sheets_to_generate: 100,
+            };
+            serialize_to_json_file(&params, "input_params.txt");
+            panic!("Please first fill out the 'input_params.txt' in the directory where `chotto.exe` is located");
+        }
 
         Input {
             background_bitmap,
