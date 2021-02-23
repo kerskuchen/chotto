@@ -2,6 +2,7 @@
   "project_name": "chotto",
   "project_display_name": "Chotto",
   "project_company_name": "SnailSpaceGames",
+  "project_copyright_year": "2021",
   "windows_appdata_dir": "Chotto",
   "mobile_display_orientation": "portrait"
 }

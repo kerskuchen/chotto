@@ -743,6 +743,9 @@ version = "0.1.0"
 dependencies = [
  "cottontail",
  "fontdue",
+ "rayon",
+ "serde",
+ "winapi",
 ]
 
 [[package]]
