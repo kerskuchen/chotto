@@ -15,7 +15,7 @@ cottontail = { path = "../cottontail"}
 fontdue = "0.4.0"
 rayon = "1.5.0"
 serde = "1.0.118"
-
+toml = "0.5.8"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["winuser"] }

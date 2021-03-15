@@ -7,9 +7,8 @@ use std::{
 
 use cottontail::{
     core::{
-        deserialize_from_json_file, panic_message_split_to_message_and_location, path_exists,
+        panic_message_split_to_message_and_location, path_exists,
         serde_derive::{Deserialize, Serialize},
-        serialize_to_json_file,
     },
     image::PixelRGBA,
 };
@@ -22,58 +21,96 @@ use cottontail::{
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
 #[derive(Debug, Serialize, Deserialize)]
-struct InputParams {
-    text_font_size: f32,
-    text_color: PixelRGBA,
-    grid_top_left: Vec2i,
-    grid_bottom_right: Vec2i,
-    number_sheets_to_generate: usize,
+struct DrawParams {
+    number_of_sheets_to_generate: usize,
+    text_font_size: u32,
+    text_color_rgb: (u8, u8, u8),
+    bingo_grid_pixel_location_left_top_right_bottom: (u32, u32, u32, u32),
 }
 
 struct Input {
     background_bitmap: Bitmap,
-    text_font_data: Vec<u8>,
-    params: InputParams,
+    font: fontdue::Font,
+    params: DrawParams,
 }
 
 impl Input {
     fn new() -> Input {
+        let files = collect_files(".");
+        assert!(
+            files
+                .iter()
+                .filter(|filepath| filepath.to_lowercase().ends_with(".png"))
+                .count()
+                == 1,
+            "Please place exactly one PNG and one TTF file into the directory where `chotto.exe` is located"
+        );
+        assert!(
+            files
+                .iter()
+                .filter(|filepath| filepath.to_lowercase().ends_with(".ttf"))
+                .count()
+                == 1,
+            "Please place exactly one PNG and one TTF file into the directory where `chotto.exe` is located"
+        );
+
         let mut background_bitmap = Bitmap::new_empty();
-        let mut text_font_data = Vec::new();
+        let mut font = None;
         for filepath in collect_files(".") {
             if filepath.to_lowercase().ends_with(".png") {
                 background_bitmap = Bitmap::from_png_file_or_panic(&filepath);
+                assert!(
+                    background_bitmap.width != 0 && background_bitmap.height != 0,
+                    "Image file '{}' is 0x0 pixels which is not allowed - is the file ok?",
+                    filepath
+                );
             }
             if filepath.to_lowercase().ends_with(".ttf") {
-                text_font_data =
-                    read_file_whole(&filepath).expect(&format!("Cannot read file '{}'", filepath));
+                let font_data = read_file_whole(&filepath)
+                    .expect(&format!("Cannot read font file '{}'", filepath));
+                font = Some(
+                    fontdue::Font::from_bytes(font_data, fontdue::FontSettings::default()).expect(
+                        &format!("Cannot decode font file '{}' - is the file ok?", filepath),
+                    ),
+                );
             }
         }
-        assert!(
-            background_bitmap.width != 0 && background_bitmap.height != 0,
-            "Please place a PNG image file into the directory where `chotto.exe` is located"
-        );
-        assert!(
-            !text_font_data.is_empty(),
-            "Please place a TTF font file into the directory where `chotto.exe` is located"
-        );
 
-        if !path_exists("input_params.txt") {
-            let params = InputParams {
-                text_font_size: 100.0,
-                text_color: PixelRGBA::new(255, 128, 64, 255),
-                grid_top_left: Vec2i::new(15, 32),
-                grid_bottom_right: Vec2i::new(234, 433),
-                number_sheets_to_generate: 100,
-            };
-            serialize_to_json_file(&params, "input_params.txt");
-            panic!("Please first fill out the 'input_params.txt' in the directory where `chotto.exe` is located");
+        if font.is_none() {
+            unreachable!();
         }
-        let params = deserialize_from_json_file("input_params.txt");
+
+        const DRAW_PARAMETERS_FILENAME: &str = "draw_parameters.txt";
+        if !path_exists(DRAW_PARAMETERS_FILENAME) {
+            let params = DrawParams {
+                number_of_sheets_to_generate: 10,
+                text_font_size: 100,
+                text_color_rgb: (255, 128, 64),
+                bingo_grid_pixel_location_left_top_right_bottom: (
+                    0,
+                    0,
+                    background_bitmap.width as u32,
+                    background_bitmap.height as u32,
+                ),
+            };
+            let params_string = toml::to_string(&params).unwrap();
+            std::fs::write(DRAW_PARAMETERS_FILENAME, &params_string).expect(&format!(
+                "Could not create file '{}'",
+                DRAW_PARAMETERS_FILENAME
+            ));
+            panic!(
+                "Please first fill out the '{}' in the directory where 'chotto.exe' is located",
+                DRAW_PARAMETERS_FILENAME
+            );
+        }
+        let params = toml::from_str(&std::fs::read_to_string(DRAW_PARAMETERS_FILENAME).expect(
+            &format!("Could not read file '{}'", DRAW_PARAMETERS_FILENAME),
+        ))
+        .unwrap_or_else(|error| panic!("Could not read draw parameters: {}", error));
 
         Input {
             background_bitmap,
-            text_font_data,
+            font: font.unwrap(),
             params,
         }
     }
@@ -83,16 +120,39 @@ fn main() {
     set_panic_hook();
 
     let input = Input::new();
-    let top_left = input.params.grid_top_left;
-    let bottom_right = input.params.grid_bottom_right;
-    let font_size = input.params.text_font_size;
-    let font_data = input.text_font_data;
+    let top_left = Vec2i::new(
+        input
+            .params
+            .bingo_grid_pixel_location_left_top_right_bottom
+            .0 as i32,
+        input
+            .params
+            .bingo_grid_pixel_location_left_top_right_bottom
+            .1 as i32,
+    );
+    let bottom_right = Vec2i::new(
+        input
+            .params
+            .bingo_grid_pixel_location_left_top_right_bottom
+            .2 as i32,
+        input
+            .params
+            .bingo_grid_pixel_location_left_top_right_bottom
+            .3 as i32,
+    );
+    let font_size = input.params.text_font_size as f32;
+    let font = input.font;
     let background = input.background_bitmap;
-    let color = input.params.text_color.to_color();
-    let sheet_count = input.params.number_sheets_to_generate;
+    let color = PixelRGBA::new(
+        input.params.text_color_rgb.0,
+        input.params.text_color_rgb.1,
+        input.params.text_color_rgb.2,
+        255,
+    )
+    .to_color();
+    let sheet_count = input.params.number_of_sheets_to_generate;
 
     let digits = "0123456789";
-    let font = fontdue::Font::from_bytes(font_data, fontdue::FontSettings::default()).unwrap();
     let digits_metrics_bitmaps_premultiplied: HashMap<char, _> = digits
         .chars()
         .map(|digit| (digit, font.rasterize(digit, font_size)))
