@@ -80,6 +80,30 @@ impl Input {
             unreachable!();
         }
 
+        const TOML_DOCUMENTATION_HEADER: &str = 
+"####################################################################################################
+#
+# In this file we can change various things about how Chotto should draw our Bingo-sheets by editing
+# the four parameters at the bottom.
+#
+# The `number_of_sheets_to_generate` parameter indicates how many Bingo-sheets we want Chotto 
+# to generate. The final sheets will be placed in the `output_sheets` directory once Chotto was run.
+#
+# The `text_font_size` and `text_color_rgb` paramters can be used to customize the final text 
+# size and color. The color values are [Red, Green, Blue] in order and each range between 0-255.
+# The font size is given in pixel-height. Note though that the final numbers on the grid may be 
+# slightly smaller than the given font size. We can just try out some values until it looks good.
+#
+# The `bingo_grid_pixel_location_left_top_right_bottom` parameter defines the rectangular region
+# in the image where the Bingo numbers will be drawn to. The values are [Left, Top, Right, Bottom]
+# and are given in pixels.
+#
+# For example if we have a 100x100px image and only want numbers drawn on the bottom half of the 
+# image we can write:
+#
+# bingo_grid_pixel_location_left_top_right_bottom = [0, 50, 100, 100]
+#
+####################################################################################################";
         const DRAW_PARAMETERS_FILENAME: &str = "draw_parameters.txt";
         if !path_exists(DRAW_PARAMETERS_FILENAME) {
             let params = DrawParams {
@@ -93,7 +117,11 @@ impl Input {
                     background_bitmap.height as u32,
                 ),
             };
-            let params_string = toml::to_string(&params).unwrap();
+            let params_string = format!(
+                "{}\n\n{}",
+                TOML_DOCUMENTATION_HEADER,
+                toml::to_string(&params).unwrap()
+            );
             std::fs::write(DRAW_PARAMETERS_FILENAME, &params_string).expect(&format!(
                 "Could not create file '{}'",
                 DRAW_PARAMETERS_FILENAME
