@@ -84,7 +84,7 @@ impl Input {
         if !path_exists(DRAW_PARAMETERS_FILENAME) {
             let params = DrawParams {
                 number_of_sheets_to_generate: 10,
-                text_font_size: 100,
+                text_font_size: background_bitmap.height as u32 / 20,
                 text_color_rgb: (255, 128, 64),
                 bingo_grid_pixel_location_left_top_right_bottom: (
                     0,
