@@ -37,22 +37,24 @@ struct Input {
 impl Input {
     fn new() -> Input {
         let files = collect_files(".");
-        assert!(
-            files
-                .iter()
-                .filter(|filepath| filepath.to_lowercase().ends_with(".png"))
-                .count()
-                == 1,
-            "Please place exactly one PNG and one TTF file into the directory where `chotto.exe` is located"
-        );
-        assert!(
-            files
+        if files
+            .iter()
+            .filter(|filepath| filepath.to_lowercase().ends_with(".png"))
+            .count()
+            != 1
+            || files
                 .iter()
                 .filter(|filepath| filepath.to_lowercase().ends_with(".ttf"))
                 .count()
-                == 1,
-            "Please place exactly one PNG and one TTF file into the directory where `chotto.exe` is located"
-        );
+                != 1
+        {
+            show_messagebox(
+                "Chotto",
+                "Please place exactly one PNG and one TTF file into the directory where `chotto.exe` is located and then restart Chotto",
+                false,
+            );
+            std::process::abort();
+        }
 
         let mut background_bitmap = Bitmap::new_empty();
         let mut font = None;
@@ -80,7 +82,7 @@ impl Input {
             unreachable!();
         }
 
-        const TOML_DOCUMENTATION_HEADER: &str = 
+        const TOML_DOCUMENTATION_HEADER: &str =
 "####################################################################################################
 #
 # In this file we can change various things about how Chotto should draw our Bingo-sheets by editing
@@ -126,11 +128,17 @@ impl Input {
                 "Could not create file '{}'",
                 DRAW_PARAMETERS_FILENAME
             ));
-            panic!(
-                "Please first fill out the '{}' in the directory where 'chotto.exe' is located",
-                DRAW_PARAMETERS_FILENAME
+            show_messagebox(
+                "Chotto",
+                &format!(
+                    "Please first fill out the '{}' in the directory where 'chotto.exe' is located and then restart Chotto",
+                    DRAW_PARAMETERS_FILENAME
+                ),
+                false,
             );
+            std::process::abort();
         }
+
         let params = toml::from_str(&std::fs::read_to_string(DRAW_PARAMETERS_FILENAME).expect(
             &format!("Could not read file '{}'", DRAW_PARAMETERS_FILENAME),
         ))
