@@ -1,4 +1,4 @@
-#![windows_subsystem = "windows"]
+// #![windows_subsystem = "windows"]
 
 use std::{
     collections::HashMap,
@@ -10,7 +10,7 @@ use cottontail::{
         panic_message_split_to_message_and_location, path_exists,
         serde_derive::{Deserialize, Serialize},
     },
-    image::{Color, PixelRGBA},
+    image::{Color, Grid, PixelRGBA},
 };
 
 use cottontail::{
@@ -19,6 +19,89 @@ use cottontail::{
     math::{Random, Shufflebag, Vec2i},
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+
+fn main() {
+    set_panic_hook();
+
+    let input = Input::new();
+    let font = input.font;
+    let background = input.background_bitmap;
+    let sheet_count = input.params.number_of_sheets_to_generate;
+    let top_left = Vec2i::new(
+        input
+            .params
+            .bingo_grid_pixel_location_left_top_right_bottom
+            .0 as i32,
+        input
+            .params
+            .bingo_grid_pixel_location_left_top_right_bottom
+            .1 as i32,
+    );
+    let bottom_right = Vec2i::new(
+        input
+            .params
+            .bingo_grid_pixel_location_left_top_right_bottom
+            .2 as i32,
+        input
+            .params
+            .bingo_grid_pixel_location_left_top_right_bottom
+            .3 as i32,
+    );
+    let font_size = input.params.text_font_size as f32;
+    let text_color = PixelRGBA::new(
+        input.params.text_color_rgb.0,
+        input.params.text_color_rgb.1,
+        input.params.text_color_rgb.2,
+        255,
+    )
+    .to_color();
+
+    if path_exists("output_sheets") {
+        std::fs::remove_dir_all("output_sheets").ok();
+    }
+
+    let cell_width = (bottom_right.x - top_left.x) / 5;
+    let cell_height = (bottom_right.y - top_left.y) / 5;
+    let number_bitmaps_premultiplied =
+        create_number_bitmaps_premultiplied(font, font_size, text_color);
+
+    create_random_number_grids(sheet_count)
+        .into_par_iter()
+        .enumerate()
+        .for_each(|(sheet_index, number_grid)| {
+            let mut background = background.clone();
+            for y in 0..5 {
+                for x in 0..5 {
+                    if x == 2 && y == 2 {
+                        continue;
+                    }
+                    let center = top_left
+                        + Vec2i::new(
+                            x * cell_width + cell_width / 2,
+                            y * cell_height + cell_height / 2,
+                        );
+
+                    let number = number_grid.get(x, y);
+                    let number_bitmap = number_bitmaps_premultiplied.get(&number).unwrap();
+                    number_bitmap.blit_to_alpha_blended_premultiplied(
+                        &mut background,
+                        center - number_bitmap.rect().dim / 2,
+                        true,
+                        cottontail::image::ColorBlendMode::Normal,
+                    );
+                }
+            }
+
+            background
+                .to_unpremultiplied_alpha()
+                .write_to_png_file(&format!("output_sheets/sheet_{}.png", sheet_index + 1));
+        });
+
+    #[cfg(not(debug_assertions))]
+    show_messagebox("Chotto", "Finished creating sheets. Enjoy!", false);
+}
+
+const MAX_SHEET_COUNT: usize = 10_000;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct DrawParams {
@@ -139,11 +222,20 @@ impl Input {
             std::process::abort();
         }
 
-        let params = toml::from_str(&std::fs::read_to_string(DRAW_PARAMETERS_FILENAME).expect(
-            &format!("Could not read file '{}'", DRAW_PARAMETERS_FILENAME),
-        ))
+        let params: DrawParams = toml::from_str(
+            &std::fs::read_to_string(DRAW_PARAMETERS_FILENAME).expect(&format!(
+                "Could not read file '{}'",
+                DRAW_PARAMETERS_FILENAME
+            )),
+        )
         .unwrap_or_else(|error| panic!("Could not read draw parameters: {}", error));
 
+        assert!(
+            params.number_of_sheets_to_generate <= MAX_SHEET_COUNT,
+            "The maximum sheet count is {} - please reduce it in '{}'!",
+            MAX_SHEET_COUNT,
+            DRAW_PARAMETERS_FILENAME
+        );
         Input {
             background_bitmap,
             font: font.unwrap(),
@@ -152,100 +244,123 @@ impl Input {
     }
 }
 
-fn main() {
-    set_panic_hook();
-
-    let input = Input::new();
-    let font = input.font;
-    let background = input.background_bitmap;
-    let sheet_count = input.params.number_of_sheets_to_generate;
-    let top_left = Vec2i::new(
-        input
-            .params
-            .bingo_grid_pixel_location_left_top_right_bottom
-            .0 as i32,
-        input
-            .params
-            .bingo_grid_pixel_location_left_top_right_bottom
-            .1 as i32,
-    );
-    let bottom_right = Vec2i::new(
-        input
-            .params
-            .bingo_grid_pixel_location_left_top_right_bottom
-            .2 as i32,
-        input
-            .params
-            .bingo_grid_pixel_location_left_top_right_bottom
-            .3 as i32,
-    );
-    let font_size = input.params.text_font_size as f32;
-    let text_color = PixelRGBA::new(
-        input.params.text_color_rgb.0,
-        input.params.text_color_rgb.1,
-        input.params.text_color_rgb.2,
-        255,
-    )
-    .to_color();
-
-    let number_bitmaps_premultiplied =
-        create_number_bitmaps_premultiplied(font, font_size, text_color);
-
-    let cell_width = (bottom_right.x - top_left.x) / 5;
-    let cell_height = (bottom_right.y - top_left.y) / 5;
-
+/// NOTE: In this function we make sure that each column k of each newly generated grid is
+///       maximally different to each respective column k of the previously generated grids.
+///       We do this by first generating all possible arrangements for each column. Then for
+///       each new grid we randomly pick one such arrangement for column k until we get a column
+///       that is different enough from the respective column k of the previous grids.
+/// NOTE: Doing this column based approach is more precise and faster than comparing whole grids
+///       because we can test all possibilities for each column faster. The problem is that our
+///       solution space is smaller than with the grid-based approach. This is ok for our case
+///       though as we won't generate more than `MAX_SHEET_COUNT` sheets
+///
+fn create_random_number_grids(sheet_count: usize) -> Vec<Grid<i32>> {
     let start = SystemTime::now();
     let since_the_epoch = start.duration_since(UNIX_EPOCH).unwrap();
     let seed = (since_the_epoch.as_nanos() & (std::u64::MAX as u128)) as u64;
-    let randoms = Random::new_from_seed_multiple(seed, sheet_count);
-    randoms
-        .into_par_iter()
-        .enumerate()
-        .for_each(|(sheet_index, mut random)| {
-            let sheet_index = sheet_index + 1;
+    let mut random = Random::new_from_seed(seed);
 
-            let mut background = background.clone();
-            let mut col_1 = Shufflebag::new((1..=15).collect());
-            let mut col_2 = Shufflebag::new((16..=30).collect());
-            let mut col_3 = Shufflebag::new((31..=45).collect());
-            let mut col_4 = Shufflebag::new((46..=60).collect());
-            let mut col_5 = Shufflebag::new((61..=75).collect());
-            for y in 0..5 {
-                for x in 0..5 {
-                    if x == 2 && y == 2 {
-                        continue;
-                    }
-                    let center = top_left
-                        + Vec2i::new(
-                            x * cell_width + cell_width / 2,
-                            y * cell_height + cell_height / 2,
-                        );
+    // Create shufflebags
+    let column_bags: Vec<Shufflebag<_>> = [
+        (1..=15).collect::<Vec<_>>(),
+        (16..=30).collect::<Vec<_>>(),
+        (31..=45).collect::<Vec<_>>(),
+        (46..=60).collect::<Vec<_>>(),
+        (61..=75).collect::<Vec<_>>(),
+    ]
+    .iter()
+    .map(|column| Shufflebag::new(get_all_possible_arrangements_of_size_k(5, column)))
+    .collect();
 
-                    let number = match x {
-                        0 => col_1.get_next(&mut random),
-                        1 => col_2.get_next(&mut random),
-                        2 => col_3.get_next(&mut random),
-                        3 => col_4.get_next(&mut random),
-                        4 => col_5.get_next(&mut random),
-                        _ => unreachable!(),
-                    };
-                    let number_bitmap = number_bitmaps_premultiplied.get(&number).unwrap();
-                    number_bitmap.blit_to_alpha_blended_premultiplied(
-                        &mut background,
-                        center - number_bitmap.rect().dim / 2,
-                        true,
-                        cottontail::image::ColorBlendMode::Normal,
-                    );
+    // Create columns
+    let mut columns: Vec<Vec<Vec<i32>>> = vec![Vec::new(); 5];
+    for (col_index, mut column_bag) in column_bags.into_iter().enumerate() {
+        let mut matching_cells_tolerance = 0;
+        let mut failed_pick_count = 0;
+
+        while columns[col_index].len() < sheet_count {
+            let new_column = column_bag.get_next(&mut random);
+
+            if columns[col_index]
+                .iter()
+                .map(|previous_column| count_matching_cells(&new_column, previous_column))
+                .max()
+                .unwrap_or(0)
+                > matching_cells_tolerance
+            {
+                failed_pick_count += 1;
+                if failed_pick_count >= column_bag.elems.len() {
+                    // We tried out all possible arrangements with this tolerance level.
+                    // To generate more columns we need to increase our tolerance and therefore
+                    // allow new columns to be more similar to existing ones.
+                    matching_cells_tolerance += 1;
+                    failed_pick_count = 0;
+                    column_bag.reset();
                 }
+                continue;
             }
 
-            background
-                .to_unpremultiplied_alpha()
-                .write_to_png_file(&format!("output_sheets/sheet_{}.png", sheet_index));
-        });
+            columns[col_index].push(new_column);
+        }
+    }
 
-    #[cfg(not(debug_assertions))]
-    show_messagebox("Chotto", "Finished creating sheets. Enjoy!", false);
+    // Create grids out of our columns
+    (0..sheet_count)
+        .into_iter()
+        .map(|sheet_index| {
+            let mut grid = Grid::new(5, 5);
+
+            for y in 0..5 {
+                for x in 0..5 {
+                    if y == 2 && x == 2 {
+                        continue;
+                    }
+
+                    grid.set(x, y, columns[x as usize][sheet_index][y as usize]);
+                }
+            }
+            grid
+        })
+        .collect()
+}
+
+fn get_all_possible_arrangements_of_size_k<ElemType: Clone + Copy + Eq + PartialEq>(
+    k: usize,
+    elements: &[ElemType],
+) -> Vec<Vec<ElemType>> {
+    assert!(0 < k && k <= elements.len());
+
+    if k == 1 {
+        let mut result = Vec::new();
+        for elem in elements {
+            result.push(vec![*elem]);
+        }
+        return result;
+    }
+
+    let k_minus_one_subsets = get_all_possible_arrangements_of_size_k(k - 1, elements);
+
+    let mut result = Vec::new();
+    for k_minus_one_subset in k_minus_one_subsets {
+        for &fixed in elements {
+            let mut subset = k_minus_one_subset.clone();
+            if subset.contains(&fixed) {
+                continue;
+            }
+            subset.push(fixed);
+            result.push(subset);
+        }
+    }
+
+    result
+}
+
+fn count_matching_cells(column: &[i32], existing_column: &[i32]) -> usize {
+    column
+        .iter()
+        .zip(existing_column.iter())
+        .filter(|(left, right)| left == right)
+        .count()
 }
 
 fn create_number_bitmaps_premultiplied(
