@@ -10,7 +10,7 @@ use cottontail::{
         panic_message_split_to_message_and_location, path_exists,
         serde_derive::{Deserialize, Serialize},
     },
-    image::PixelRGBA,
+    image::{Color, PixelRGBA},
 };
 
 use cottontail::{
@@ -156,6 +156,9 @@ fn main() {
     set_panic_hook();
 
     let input = Input::new();
+    let font = input.font;
+    let background = input.background_bitmap;
+    let sheet_count = input.params.number_of_sheets_to_generate;
     let top_left = Vec2i::new(
         input
             .params
@@ -177,35 +180,97 @@ fn main() {
             .3 as i32,
     );
     let font_size = input.params.text_font_size as f32;
-    let font = input.font;
-    let background = input.background_bitmap;
-    let color = PixelRGBA::new(
+    let text_color = PixelRGBA::new(
         input.params.text_color_rgb.0,
         input.params.text_color_rgb.1,
         input.params.text_color_rgb.2,
         255,
     )
     .to_color();
-    let sheet_count = input.params.number_of_sheets_to_generate;
 
-    let digits = "0123456789";
-    let digits_metrics_bitmaps_premultiplied: HashMap<char, _> = digits
-        .chars()
-        .map(|digit| (digit, font.rasterize(digit, font_size)))
-        .map(|(digit, (metrics, bytes))| {
-            let mut bitmap_premultiplied = Bitmap::from_greyscale_bytes_premultiplied(
-                &bytes,
-                metrics.width as u32,
-                metrics.height as u32,
-            );
-            for pixel in bitmap_premultiplied.data.iter_mut() {
-                pixel.r = ((pixel.r as f32) * color.r) as u8;
-                pixel.g = ((pixel.g as f32) * color.g) as u8;
-                pixel.b = ((pixel.b as f32) * color.b) as u8;
+    let number_bitmaps_premultiplied =
+        create_number_bitmaps_premultiplied(font, font_size, text_color);
+
+    let cell_width = (bottom_right.x - top_left.x) / 5;
+    let cell_height = (bottom_right.y - top_left.y) / 5;
+
+    let start = SystemTime::now();
+    let since_the_epoch = start.duration_since(UNIX_EPOCH).unwrap();
+    let seed = (since_the_epoch.as_nanos() & (std::u64::MAX as u128)) as u64;
+    let randoms = Random::new_from_seed_multiple(seed, sheet_count);
+    randoms
+        .into_par_iter()
+        .enumerate()
+        .for_each(|(sheet_index, mut random)| {
+            let sheet_index = sheet_index + 1;
+
+            let mut background = background.clone();
+            let mut col_1 = Shufflebag::new((1..=15).collect());
+            let mut col_2 = Shufflebag::new((16..=30).collect());
+            let mut col_3 = Shufflebag::new((31..=45).collect());
+            let mut col_4 = Shufflebag::new((46..=60).collect());
+            let mut col_5 = Shufflebag::new((61..=75).collect());
+            for y in 0..5 {
+                for x in 0..5 {
+                    if x == 2 && y == 2 {
+                        continue;
+                    }
+                    let center = top_left
+                        + Vec2i::new(
+                            x * cell_width + cell_width / 2,
+                            y * cell_height + cell_height / 2,
+                        );
+
+                    let number = match x {
+                        0 => col_1.get_next(&mut random),
+                        1 => col_2.get_next(&mut random),
+                        2 => col_3.get_next(&mut random),
+                        3 => col_4.get_next(&mut random),
+                        4 => col_5.get_next(&mut random),
+                        _ => unreachable!(),
+                    };
+                    let number_bitmap = number_bitmaps_premultiplied.get(&number).unwrap();
+                    number_bitmap.blit_to_alpha_blended_premultiplied(
+                        &mut background,
+                        center - number_bitmap.rect().dim / 2,
+                        true,
+                        cottontail::image::ColorBlendMode::Normal,
+                    );
+                }
             }
-            (digit, (metrics, bitmap_premultiplied))
-        })
-        .collect();
+
+            background
+                .to_unpremultiplied_alpha()
+                .write_to_png_file(&format!("output_sheets/sheet_{}.png", sheet_index));
+        });
+
+    #[cfg(not(debug_assertions))]
+    show_messagebox("Chotto", "Finished creating sheets. Enjoy!", false);
+}
+
+fn create_number_bitmaps_premultiplied(
+    font: fontdue::Font,
+    font_size: f32,
+    color: Color,
+) -> HashMap<i32, Bitmap> {
+    let digits_metrics_bitmaps_premultiplied: HashMap<char, (fontdue::Metrics, Bitmap)> =
+        "0123456789"
+            .chars()
+            .map(|digit| (digit, font.rasterize(digit, font_size)))
+            .map(|(digit, (metrics, image_bytes))| {
+                let mut bitmap_premultiplied = Bitmap::from_greyscale_bytes_premultiplied(
+                    &image_bytes,
+                    metrics.width as u32,
+                    metrics.height as u32,
+                );
+                for pixel in bitmap_premultiplied.data.iter_mut() {
+                    pixel.r = ((pixel.r as f32) * color.r) as u8;
+                    pixel.g = ((pixel.g as f32) * color.g) as u8;
+                    pixel.b = ((pixel.b as f32) * color.b) as u8;
+                }
+                (digit, (metrics, bitmap_premultiplied))
+            })
+            .collect();
 
     // for (digit, (_metrics, bitmap_premultiplied)) in digits_metrics_bitmaps_premultiplied.iter() {
     //     bitmap_premultiplied
@@ -213,7 +278,7 @@ fn main() {
     //         .write_to_png_file(&format!("target/test_digits/{}.png", digit));
     // }
 
-    let mut number_bitmaps = HashMap::new();
+    let mut number_bitmaps_premultiplied = HashMap::new();
     for number in 1..=75 {
         let number_string = number.to_string();
         let mut layout =
@@ -265,64 +330,9 @@ fn main() {
         //     .to_unpremultiplied_alpha()
         //     .write_to_png_file(&format!("target/test_numbers/{}.png", number));
 
-        number_bitmaps.insert(number, number_bitmap_premultiplied);
+        number_bitmaps_premultiplied.insert(number, number_bitmap_premultiplied);
     }
-
-    let cell_width = (bottom_right.x - top_left.x) / 5;
-    let cell_height = (bottom_right.y - top_left.y) / 5;
-
-    let start = SystemTime::now();
-    let since_the_epoch = start.duration_since(UNIX_EPOCH).unwrap();
-    let seed = (since_the_epoch.as_nanos() & (std::u64::MAX as u128)) as u64;
-    let randoms = Random::new_from_seed_multiple(seed, sheet_count);
-    randoms
-        .into_par_iter()
-        .enumerate()
-        .for_each(|(sheet_index, mut random)| {
-            let sheet_index = sheet_index + 1;
-
-            let mut background = background.clone();
-            let mut col_1 = Shufflebag::new((1..=15).collect());
-            let mut col_2 = Shufflebag::new((16..=30).collect());
-            let mut col_3 = Shufflebag::new((31..=45).collect());
-            let mut col_4 = Shufflebag::new((46..=60).collect());
-            let mut col_5 = Shufflebag::new((61..=75).collect());
-            for y in 0..5 {
-                for x in 0..5 {
-                    if x == 2 && y == 2 {
-                        continue;
-                    }
-                    let center = top_left
-                        + Vec2i::new(
-                            x * cell_width + cell_width / 2,
-                            y * cell_height + cell_height / 2,
-                        );
-
-                    let number = match x {
-                        0 => col_1.get_next(&mut random),
-                        1 => col_2.get_next(&mut random),
-                        2 => col_3.get_next(&mut random),
-                        3 => col_4.get_next(&mut random),
-                        4 => col_5.get_next(&mut random),
-                        _ => unreachable!(),
-                    };
-                    let number_bitmap = number_bitmaps.get(&number).unwrap();
-                    number_bitmap.blit_to_alpha_blended_premultiplied(
-                        &mut background,
-                        center - number_bitmap.rect().dim / 2,
-                        true,
-                        cottontail::image::ColorBlendMode::Normal,
-                    );
-                }
-            }
-
-            background
-                .to_unpremultiplied_alpha()
-                .write_to_png_file(&format!("output_sheets/sheet_{}.png", sheet_index));
-        });
-
-    #[cfg(not(debug_assertions))]
-    show_messagebox("Chotto", "Finished creating sheets. Enjoy!", false);
+    number_bitmaps_premultiplied
 }
 
 #[cfg(windows)]
